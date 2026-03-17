@@ -29,12 +29,12 @@ if st.button("Generate Images"):
         
         with st.spinner(f"Generating {num_images} images..."):
             try:
-                response = client.models.generate_content(
-                    model=model_choice,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        aspect_ratio=aspect_ratio,
-                        candidate_count=num_images,
+                response = client.models.generate_image(
+    model=model_choice,
+    prompt=prompt,  # Note: generate_image uses 'prompt', not 'contents'
+    config=types.GenerateImageConfig(  # Use GenerateImageConfig here
+        aspect_ratio=aspect_ratio,
+        number_of_images=num_images,  # Note: the parameter name is 'number_of_images'
                         # resolution=resolution # Feature available in specific regions
                     )
                 )
