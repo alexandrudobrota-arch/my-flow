@@ -3,9 +3,25 @@ from google import genai
 from google.genai import types
 import PIL.Image
 import io
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
+import uuid
 
 st.set_page_config(page_title="My Private Flow", layout="wide")
 st.title("🎨 Multi-Gen Image Studio (Nano Banana)")
+
+# --- Configure Cloudinary ---
+# We try to load secrets safely so the app doesn't crash if they are missing
+try:
+    cloudinary.config(
+        cloud_name=st.secrets.get("CLOUDINARY_CLOUD_NAME", ""),
+        api_key=st.secrets.get("CLOUDINARY_API_KEY", ""),
+        api_secret=st.secrets.get("CLOUDINARY_API_SECRET", ""),
+        secure=True
+    )
+except Exception:
+    pass # Will handle missing credentials gracefully in the UI
 
 # --- Session State ---
 if "generated_images" not in st.session_state:
@@ -18,8 +34,22 @@ def get_closest_aspect_ratio(image: PIL.Image.Image) -> str:
     ratios = {"1:1": 1.0, "16:9": 1.777, "9:16": 0.562, "4:3": 1.333, "3:4": 0.75}
     return min(ratios.keys(), key=lambda k: abs(ratios[k] - ratio))
 
+def delete_image(index, public_id):
+    """Deletes image from Cloudinary and removes it from session state."""
+    try:
+        cloudinary.uploader.destroy(public_id)
+        st.session_state.generated_images.pop(index)
+        st.toast(f"Image deleted from Cloudinary!")
+    except Exception as e:
+        st.error(f"Failed to delete: {e}")
+
 # --- Sidebar Configuration ---
 with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    # Project Folder Name
+    project_name = st.text_input("Project Folder Name", value="My_Flow_Generations", help="Images will be saved in this Cloudinary folder.")
+    
     api_key_input = st.text_input("Enter Gemini API Key (or leave blank for Secrets)", type="password")
     
     model_choice = st.selectbox(
@@ -46,14 +76,20 @@ prompt = st.text_area("What do you want to see?", placeholder="A futuristic city
 
 if st.button("Generate Images"):
     api_key = api_key_input if api_key_input else st.secrets.get("GEMINI_API_KEY", "")
+    cloud_name = st.secrets.get("CLOUDINARY_CLOUD_NAME", "")
     
     if not api_key:
         st.error("Please enter your API Key in the sidebar or add it to Streamlit secrets.")
+    elif not cloud_name:
+        st.error("Please configure your Cloudinary credentials in Streamlit secrets.")
     elif not prompt:
         st.warning("Please enter a prompt.")
     else:
         client = genai.Client(api_key=api_key)
-        st.session_state.generated_images = [] 
+        
+        # We don't clear the session state here anymore so you can build a gallery!
+        # If you want it to clear on every generation, uncomment the line below:
+        # st.session_state.generated_images = [] 
         
         if aspect_ratio_choice == "Auto":
             if input_image:
@@ -65,19 +101,17 @@ if st.button("Generate Images"):
         else:
             api_aspect_ratio = aspect_ratio_choice
         
-        with st.spinner(f"Generating {num_images} images using {model_choice}..."):
+        with st.spinner(f"Generating {num_images} images and uploading to Cloudinary..."):
             try:
                 contents_list = [prompt]
                 if input_image:
                     contents_list.append(input_image)
                     
-                # --- THE FIX: We loop the request instead of using candidate_count ---
                 for _ in range(num_images):
                     response = client.models.generate_content(
                         model=model_choice,
                         contents=contents_list,
                         config=types.GenerateContentConfig(
-                            # Removed candidate_count entirely
                             response_modalities=["IMAGE"],
                             image_config=types.ImageConfig(
                                 aspect_ratio=api_aspect_ratio
@@ -88,34 +122,68 @@ if st.button("Generate Images"):
                     for candidate in response.candidates:
                         for part in candidate.content.parts:
                             if part.inline_data:
-                                st.session_state.generated_images.append(part.inline_data.data)
+                                img_bytes = part.inline_data.data
+                                
+                                # --- Upload to Cloudinary ---
+                                upload_result = cloudinary.uploader.upload(
+                                    io.BytesIO(img_bytes),
+                                    folder=project_name,
+                                    public_id=f"flow_gen_{uuid.uuid4().hex[:8]}", # Unique ID
+                                    resource_type="image"
+                                )
+                                
+                                # Store the dictionary with Cloudinary metadata
+                                st.session_state.generated_images.append({
+                                    "bytes": img_bytes,
+                                    "url": upload_result.get("secure_url"),
+                                    "public_id": upload_result.get("public_id")
+                                })
                                 
             except Exception as e:
                 st.error(f"Error: {e}")
 
 # --- Display Results & Action Buttons ---
 if st.session_state.generated_images:
+    st.subheader(f"📂 Project Gallery: {project_name}")
+    
+    # We use dynamic columns so it wraps nicely
     cols = st.columns(2)
-    for i, img_bytes in enumerate(st.session_state.generated_images):
+    
+    for i, img_data in enumerate(st.session_state.generated_images):
         with cols[i % 2]:
-            img = PIL.Image.open(io.BytesIO(img_bytes))
+            # Load image from bytes
+            img = PIL.Image.open(io.BytesIO(img_data["bytes"]))
             st.image(img, use_container_width=True, caption=f"Variant {i+1}")
             
-            btn_cols = st.columns(2)
+            btn_cols = st.columns(3) # Added a 3rd column for Delete
+            
+            # Download Button
             with btn_cols[0]:
                 st.download_button(
                     label="⬇️ Download",
-                    data=img_bytes,
+                    data=img_data["bytes"],
                     file_name=f"flow_generation_{i+1}.jpeg",
                     mime="image/jpeg",
                     use_container_width=True,
-                    key=f"dl_{i}"
+                    key=f"dl_{i}_{img_data['public_id']}"
                 )
             
+            # Upscale Button
             with btn_cols[1]:
                 if image_quality != "4K":
-                    if st.button("✨ Upscale to 4K", use_container_width=True, key=f"up_{i}"):
-                        st.info("Upscale logic would execute here!")
+                    if st.button("✨ Upscale", use_container_width=True, key=f"up_{i}_{img_data['public_id']}"):
+                        st.info("Upscale logic here!")
+            
+            # Delete Button
+            with btn_cols[2]:
+                # We use on_click to trigger the deletion and rerun the UI
+                st.button(
+                    "🗑️ Delete", 
+                    use_container_width=True, 
+                    key=f"del_{i}_{img_data['public_id']}",
+                    on_click=delete_image,
+                    args=(i, img_data["public_id"])
+                )
 
 st.divider()
-st.caption("Powered by Google GenAI.")
+st.caption("Powered by Google GenAI & Cloudinary.")
