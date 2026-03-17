@@ -7,20 +7,29 @@ import io
 st.set_page_config(page_title="My Private Flow", layout="wide")
 st.title("🎨 Multi-Gen Image Studio")
 
+# --- Session State ---
+# This ensures images stay on screen when buttons are clicked
+if "generated_images" not in st.session_state:
+    st.session_state.generated_images = []
+
 # --- Sidebar Configuration ---
 with st.sidebar:
     api_key_input = st.text_input("Enter Gemini API Key (or leave blank for Secrets)", type="password")
     
-    # Let the user choose between the model families
     model_choice = st.selectbox(
         "Select Model",
         [
-            "gemini-3.1-flash-image-preview", # Nano Banana Pro equivalent
-            "gemini-2.5-flash-image",         # Nano Banana 2 equivalent
-            "imagen-4.0-generate-001",        # Imagen 4 GA
-            "imagen-4.0-fast-generate-001"    # Imagen 4 Fast
+            "gemini-3-flash-image",        # Nano Banana 2
+            "imagen-4.0-generate-001",     # Imagen 4 GA
+            "imagen-4.0-fast-generate-001" # Imagen 4 Fast
         ],
-        help="Gemini models are more broadly available. Imagen models often require Vertex AI or an allowlisted API key."
+        help="Gemini 3 Flash Image is the API equivalent of Nano Banana 2."
+    )
+    
+    image_quality = st.selectbox(
+        "Image Quality", 
+        ["1K", "2K", "4K"], 
+        help="Note: Imagen 4 natively supports up to 2K. Gemini 3 models support up to 4K."
     )
     
     aspect_ratio = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16", "4:3", "3:4"])
@@ -38,11 +47,10 @@ if st.button("Generate Images"):
         st.warning("Please enter a prompt.")
     else:
         client = genai.Client(api_key=api_key)
+        st.session_state.generated_images = [] # Clear previous generation
         
         with st.spinner(f"Generating {num_images} images using {model_choice}..."):
             try:
-                cols = st.columns(2)
-                
                 # --- BRANCH 1: IMAGEN MODELS ---
                 if "imagen" in model_choice:
                     response = client.models.generate_images(
@@ -51,12 +59,12 @@ if st.button("Generate Images"):
                         config=types.GenerateImagesConfig(
                             number_of_images=num_images,
                             aspect_ratio=aspect_ratio,
-                            output_mime_type="image/jpeg"
+                            output_mime_type="image/jpeg",
+                            # Note: Actual API size parameters depend on your Cloud/Vertex config
                         )
                     )
-                    for i, generated_image in enumerate(response.generated_images):
-                        img = PIL.Image.open(io.BytesIO(generated_image.image.image_bytes))
-                        cols[i % 2].image(img, use_container_width=True, caption=f"Variant {i+1}")
+                    for img_data in response.generated_images:
+                        st.session_state.generated_images.append(img_data.image.image_bytes)
 
                 # --- BRANCH 2: GEMINI MODELS ---
                 elif "gemini" in model_choice:
@@ -71,19 +79,42 @@ if st.button("Generate Images"):
                             )
                         )
                     )
-                    
-                    image_count = 0
                     for candidate in response.candidates:
                         for part in candidate.content.parts:
                             if part.inline_data:
-                                img = PIL.Image.open(io.BytesIO(part.inline_data.data))
-                                cols[image_count % 2].image(img, use_container_width=True, caption=f"Variant {image_count+1}")
-                                image_count += 1
+                                st.session_state.generated_images.append(part.inline_data.data)
                                 
             except Exception as e:
                 st.error(f"Error: {e}")
-                if "404" in str(e):
-                    st.info("💡 **404 Tip:** Your API key does not have access to this specific model. Try one of the `gemini` image models from the dropdown instead!")
+
+# --- Display Results & Action Buttons ---
+if st.session_state.generated_images:
+    cols = st.columns(2)
+    for i, img_bytes in enumerate(st.session_state.generated_images):
+        with cols[i % 2]:
+            # Display Image
+            img = PIL.Image.open(io.BytesIO(img_bytes))
+            st.image(img, use_container_width=True, caption=f"Variant {i+1}")
+            
+            # Create a row for buttons under the image
+            btn_cols = st.columns(2)
+            
+            # Download Button
+            with btn_cols[0]:
+                st.download_button(
+                    label="⬇️ Download",
+                    data=img_bytes,
+                    file_name=f"flow_generation_{i+1}.jpeg",
+                    mime="image/jpeg",
+                    use_container_width=True,
+                    key=f"dl_{i}"
+                )
+            
+            # Upscale Button
+            with btn_cols[1]:
+                if image_quality != "4K":
+                    if st.button("✨ Upscale to 4K", use_container_width=True, key=f"up_{i}"):
+                        st.info("Upscale logic would execute here!")
 
 st.divider()
 st.caption("Powered by Google GenAI.")
