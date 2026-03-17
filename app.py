@@ -104,4 +104,6 @@ def get_images_in_folder(folder_name):
 def get_closest_aspect_ratio(image: PIL.Image.Image) -> str:
     w, h = image.size
     ratio = w / h
-    ratios = {"1:1": 1.0, "16:9": 1.777, "9:16": 0.562, "4:3": 1.333
+    # Ensure this entire line is copied, including the closing brace at the end
+    ratios = {"1:1": 1.0, "16:9": 1.777, "9:16": 0.562, "4:3": 1.333, "3:4": 0.75}
+    return min(ratios.keys(), key=lambda k: abs(ratios[k] - ratio))
