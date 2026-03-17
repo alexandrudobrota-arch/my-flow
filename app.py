@@ -8,9 +8,27 @@ st.set_page_config(page_title="My Private Flow", layout="wide")
 st.title("🎨 Multi-Gen Image Studio")
 
 # --- Session State ---
-# This ensures images stay on screen when buttons are clicked
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
+
+# --- Helper Function ---
+def get_closest_aspect_ratio(image: PIL.Image.Image) -> str:
+    """Calculates the image's ratio and snaps it to the closest supported API format."""
+    w, h = image.size
+    ratio = w / h
+    
+    # Supported ratios and their decimal equivalents
+    ratios = {
+        "1:1": 1.0, 
+        "16:9": 1.777, 
+        "9:16": 0.562, 
+        "4:3": 1.333, 
+        "3:4": 0.75
+    }
+    
+    # Find the key with the minimum difference to our actual ratio
+    closest_ratio = min(ratios.keys(), key=lambda k: abs(ratios[k] - ratio))
+    return closest_ratio
 
 # --- Sidebar Configuration ---
 with st.sidebar:
@@ -22,17 +40,20 @@ with st.sidebar:
             "gemini-3-flash-image",        # Nano Banana 2
             "imagen-4.0-generate-001",     # Imagen 4 GA
             "imagen-4.0-fast-generate-001" # Imagen 4 Fast
-        ],
-        help="Gemini 3 Flash Image is the API equivalent of Nano Banana 2."
+        ]
     )
     
-    image_quality = st.selectbox(
-        "Image Quality", 
-        ["1K", "2K", "4K"], 
-        help="Note: Imagen 4 natively supports up to 2K. Gemini 3 models support up to 4K."
-    )
+    # New File Uploader
+    uploaded_file = st.file_uploader("Upload Reference Image", type=["png", "jpg", "jpeg"])
+    input_image = None
+    if uploaded_file:
+        input_image = PIL.Image.open(uploaded_file)
+        st.image(input_image, caption="Reference Image", use_container_width=True)
     
-    aspect_ratio = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16", "4:3", "3:4"])
+    image_quality = st.selectbox("Image Quality", ["1K", "2K", "4K"])
+    
+    # Updated Aspect Ratio with Auto
+    aspect_ratio_choice = st.selectbox("Aspect Ratio", ["Auto", "1:1", "16:9", "9:16", "4:3", "3:4"])
     num_images = st.slider("Number of Images", 1, 4, 4)
 
 # --- Main UI ---
@@ -47,20 +68,33 @@ if st.button("Generate Images"):
         st.warning("Please enter a prompt.")
     else:
         client = genai.Client(api_key=api_key)
-        st.session_state.generated_images = [] # Clear previous generation
+        st.session_state.generated_images = [] 
+        
+        # Resolve "Auto" aspect ratio
+        if aspect_ratio_choice == "Auto":
+            if input_image:
+                api_aspect_ratio = get_closest_aspect_ratio(input_image)
+                st.toast(f"Auto Aspect Ratio snapped to {api_aspect_ratio}")
+            else:
+                api_aspect_ratio = "1:1" # Fallback if Auto is selected without an image
+                st.toast("No image uploaded. Auto defaulted to 1:1.")
+        else:
+            api_aspect_ratio = aspect_ratio_choice
         
         with st.spinner(f"Generating {num_images} images using {model_choice}..."):
             try:
                 # --- BRANCH 1: IMAGEN MODELS ---
                 if "imagen" in model_choice:
+                    if input_image:
+                        st.warning("Standard Imagen generation currently prioritizes text. Your reference image may be ignored. Use Gemini 3 Flash Image for native Image-to-Image.")
+                        
                     response = client.models.generate_images(
                         model=model_choice,
                         prompt=prompt,
                         config=types.GenerateImagesConfig(
                             number_of_images=num_images,
-                            aspect_ratio=aspect_ratio,
-                            output_mime_type="image/jpeg",
-                            # Note: Actual API size parameters depend on your Cloud/Vertex config
+                            aspect_ratio=api_aspect_ratio,
+                            output_mime_type="image/jpeg"
                         )
                     )
                     for img_data in response.generated_images:
@@ -68,14 +102,19 @@ if st.button("Generate Images"):
 
                 # --- BRANCH 2: GEMINI MODELS ---
                 elif "gemini" in model_choice:
+                    # Package both the image and the prompt if an image exists
+                    contents_list = [prompt]
+                    if input_image:
+                        contents_list.append(input_image)
+                        
                     response = client.models.generate_content(
                         model=model_choice,
-                        contents=prompt,
+                        contents=contents_list,
                         config=types.GenerateContentConfig(
                             candidate_count=num_images,
                             response_modalities=["IMAGE"],
                             image_config=types.ImageConfig(
-                                aspect_ratio=aspect_ratio
+                                aspect_ratio=api_aspect_ratio
                             )
                         )
                     )
@@ -92,14 +131,10 @@ if st.session_state.generated_images:
     cols = st.columns(2)
     for i, img_bytes in enumerate(st.session_state.generated_images):
         with cols[i % 2]:
-            # Display Image
             img = PIL.Image.open(io.BytesIO(img_bytes))
             st.image(img, use_container_width=True, caption=f"Variant {i+1}")
             
-            # Create a row for buttons under the image
             btn_cols = st.columns(2)
-            
-            # Download Button
             with btn_cols[0]:
                 st.download_button(
                     label="⬇️ Download",
@@ -110,7 +145,6 @@ if st.session_state.generated_images:
                     key=f"dl_{i}"
                 )
             
-            # Upscale Button
             with btn_cols[1]:
                 if image_quality != "4K":
                     if st.button("✨ Upscale to 4K", use_container_width=True, key=f"up_{i}"):
