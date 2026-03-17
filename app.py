@@ -22,7 +22,6 @@ def get_closest_aspect_ratio(image: PIL.Image.Image) -> str:
 with st.sidebar:
     api_key_input = st.text_input("Enter Gemini API Key (or leave blank for Secrets)", type="password")
     
-    # Using the correct strings for the Gemini 3 Image models
     model_choice = st.selectbox(
         "Select Model",
         [
@@ -72,22 +71,25 @@ if st.button("Generate Images"):
                 if input_image:
                     contents_list.append(input_image)
                     
-                response = client.models.generate_content(
-                    model=model_choice,
-                    contents=contents_list,
-                    config=types.GenerateContentConfig(
-                        candidate_count=num_images,
-                        response_modalities=["IMAGE"],
-                        image_config=types.ImageConfig(
-                            aspect_ratio=api_aspect_ratio
+                # --- THE FIX: We loop the request instead of using candidate_count ---
+                for _ in range(num_images):
+                    response = client.models.generate_content(
+                        model=model_choice,
+                        contents=contents_list,
+                        config=types.GenerateContentConfig(
+                            # Removed candidate_count entirely
+                            response_modalities=["IMAGE"],
+                            image_config=types.ImageConfig(
+                                aspect_ratio=api_aspect_ratio
+                            )
                         )
                     )
-                )
-                for candidate in response.candidates:
-                    for part in candidate.content.parts:
-                        if part.inline_data:
-                            st.session_state.generated_images.append(part.inline_data.data)
-                            
+                    
+                    for candidate in response.candidates:
+                        for part in candidate.content.parts:
+                            if part.inline_data:
+                                st.session_state.generated_images.append(part.inline_data.data)
+                                
             except Exception as e:
                 st.error(f"Error: {e}")
 
