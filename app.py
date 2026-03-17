@@ -1,11 +1,10 @@
 import streamlit as st
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 import PIL.Image
 import io
 
 # --- Page Config ---
-st.set_page_config(page_title="Nano Banana Pro: Multi-Gen", layout="wide")
+st.set_page_config(page_title="Nano Banana Pro: Multi-Gen", layout="wide", page_icon="🎨")
 
 # --- Sidebar Configuration ---
 with st.sidebar:
@@ -20,8 +19,8 @@ with st.sidebar:
     
     num_images = st.slider("Number of Images", min_value=1, max_value=4, value=4)
     
-    # Resolution logic (simplified for the SDK)
-    resolution = st.select_slider("Resolution", options=["256", "512", "1K"], value="1K")
+    # In the standard SDK, resolution is handled by specific strings or integers
+    resolution = st.select_slider("Resolution", options=["256", "512", "1024"], value="1024")
 
 # --- Main UI ---
 st.header("🎨 Nano Banana Pro: Multi-Gen")
@@ -39,39 +38,35 @@ if st.button("Generate Images"):
         st.warning("Please enter a prompt.")
     else:
         try:
-            # 1. Initialize the Client
-            client = genai.Client(api_key=api_key)
+            # 1. Configure the API
+            genai.configure(api_key=api_key)
 
             with st.spinner("Generating magic..."):
-                # 2. Use generate_image (NOT generate_content)
-                # 3. Use GenerateImageConfig (NOT GenerateContentConfig)
-                response = client.models.generate_image(
-                    model='gemini-3-flash-image',  # Official name for Nano Banana 2/Pro
+                # 2. Use ImageGenerationModel (This fixes the 'Models' attribute error)
+                # 'imagen-3' or 'gemini-3-flash-image' are the common model strings
+                model = genai.ImageGenerationModel("imagen-3")
+
+                # 3. Use generate_images (Note the 's' at the end)
+                # This fixes the Pydantic 'aspect_ratio' error
+                response = model.generate_images(
                     prompt=prompt,
-                    config=types.GenerateImageConfig(
-                        aspect_ratio=aspect_ratio,
-                        number_of_images=num_images,
-                        output_mime_type='image/jpeg'
-                    )
+                    number_of_images=num_images,
+                    aspect_ratio=aspect_ratio,
                 )
 
                 # 4. Display the results
-                if response.generated_images:
-                    cols = st.columns(2)  # Create a grid
-                    for idx, generated_image in enumerate(response.generated_images):
-                        # Convert bytes to an image object
-                        image_bytes = generated_image.image.image_bytes
-                        img = PIL.Image.open(io.BytesIO(image_bytes))
-                        
-                        # Place in the grid
+                if response.images:
+                    cols = st.columns(2)  # Create a 2-column grid
+                    for idx, img_obj in enumerate(response.images):
+                        # The standard SDK returns PIL-ready image objects directly
                         with cols[idx % 2]:
-                            st.image(img, use_container_width=True, caption=f"Generation {idx+1}")
+                            st.image(img_obj.image, use_container_width=True, caption=f"Generation {idx+1}")
                 else:
-                    st.error("No images were generated. Check your prompt safety filters.")
+                    st.error("No images were returned. This might be due to safety filters.")
 
         except Exception as e:
-            # This captures the Pydantic or API errors and shows them clearly
-            st.error(f"Error: {str(e)}")
+            # Displays the error clearly if something goes wrong
+            st.error(f"Something went wrong: {str(e)}")
 
 st.markdown("---")
 st.caption("Using Gemini Ultra Cloud Credits via API.")
