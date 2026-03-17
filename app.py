@@ -22,12 +22,13 @@ def get_closest_aspect_ratio(image: PIL.Image.Image) -> str:
 with st.sidebar:
     api_key_input = st.text_input("Enter Gemini API Key (or leave blank for Secrets)", type="password")
     
-    # Using the true API strings for the Nano Banana models
+    # Using the correct strings for the Gemini 3 Image models
     model_choice = st.selectbox(
         "Select Model",
         [
-            "gemini-2.5-flash-image-preview", # Nano Banana equivalent
-            "gemini-3-pro-preview"            # Nano Banana Pro equivalent
+            "gemini-3.1-flash-image-preview", # Nano Banana 2
+            "gemini-3-pro-image-preview",     # Nano Banana Pro
+            "gemini-2.5-flash-image"          # Nano Banana (Stable)
         ]
     )
     
