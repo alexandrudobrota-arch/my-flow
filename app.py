@@ -15,15 +15,15 @@ st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #e2e8f0; }
     header { background-color: transparent !important; }
-    h1, h2, h3 { color: #ff6b00 !important; font-family: 'Arial Black', sans-serif; text-transform: uppercase; letter-spacing: 1.5px; }
-    .stButton>button { background-color: #ff6b00; color: #ffffff; font-weight: 800; border: none; border-radius: 4px; text-transform: uppercase; transition: all 0.3s ease-in-out; }
-    .stButton>button:hover { background-color: #ff8533; transform: scale(1.02); box-shadow: 0 0 15px rgba(255, 107, 0, 0.4); }
+    h1, h2, h3 { color: #39ff14 !important; font-family: 'Arial Black', sans-serif; text-transform: uppercase; letter-spacing: 1.5px; }
+    .stButton>button { background-color: #39ff14; color: #0b0f19; font-weight: 800; border: none; border-radius: 4px; text-transform: uppercase; transition: all 0.3s ease-in-out; }
+    .stButton>button:hover { background-color: #4cff2e; transform: scale(1.02); box-shadow: 0 0 15px rgba(57, 255, 20, 0.4); color: #0b0f19; }
     [data-testid="stSidebar"] { background-color: #121826; border-right: 1px solid #2d3748; }
     .stTextInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea { background-color: #1a202c; color: #ffffff; border: 1px solid #4a5568; border-radius: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 Bullseye Media House")
+st.title("🐂 Bullseye Media House")
 st.caption("Next-Gen Generative Asset Studio")
 
 # --- Configure Cloudinary ---
