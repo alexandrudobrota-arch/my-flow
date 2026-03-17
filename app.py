@@ -4,94 +4,57 @@ from google.genai import types
 import PIL.Image
 import io
 
-# --- Page Config ---
-st.set_page_config(page_title="Gemini & Nano Banana Studio", layout="wide", page_icon="🎨")
-
-# --- API Key Management (Secure) ---
-# This looks for your key safely in Streamlit's backend or a local .streamlit/secrets.toml file
-try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-except (KeyError, FileNotFoundError):
-    st.error("🚨 API Key not found! Please add GEMINI_API_KEY to your Streamlit secrets.")
-    st.stop()
+st.set_page_config(page_title="My Private Flow", layout="wide")
+st.title("🎨 Image Generator (Imagen 3)")
 
 # --- Sidebar Configuration ---
 with st.sidebar:
-    st.title("⚙️ Settings")
+    # Allows falling back to manual input if secrets aren't set up right locally
+    api_key_input = st.text_input("Enter Gemini API Key (or leave blank to use Secrets)", type="password")
     
-    # Model Selection
-    model_choice = st.selectbox(
-        "Choose a Model",
-        options=["Nano Banana Pro", "Nano Banana 2", "Gemini 3 Flash"]
-    )
+    # The correct model string for image generation in the API
+    model_choice = "imagen-3.0-generate-001" 
     
-    # Only show image settings if an image model is selected
-    if "Banana" in model_choice:
-        aspect_ratio = st.selectbox("Aspect Ratio", options=["1:1", "4:3", "3:4", "16:9", "9:16"], index=0)
-        num_images = st.slider("Number of Images", min_value=1, max_value=4, value=1)
-        # Resolution is tracked for the UI, but natively handled by the model
-        resolution = st.selectbox("Resolution", options=["1K", "2K", "4K"], index=0)
-    else:
-        st.info("💡 Gemini 3 Flash is a text model. Image settings are hidden.")
+    # Supported aspect ratios for Imagen 3
+    aspect_ratio = st.selectbox("Aspect Ratio", 
+        ["1:1", "16:9", "9:16", "4:3", "3:4"])
+    
+    num_images = st.slider("Number of Images", 1, 4, 4)
 
 # --- Main UI ---
-st.header(f"✨ Generating with {model_choice}")
+prompt = st.text_area("What do you want to see?", placeholder="A futuristic city...")
 
-prompt = st.text_area(
-    "What do you want to create or ask?",
-    placeholder="e.g., A cinematic shot of a futuristic city...",
-    height=150
-)
-
-if st.button("Generate"):
-    if not prompt:
-        st.warning("Please enter a prompt first!")
+if st.button("Generate Images"):
+    # Prioritize manual input, fallback to Streamlit secrets
+    api_key = api_key_input if api_key_input else st.secrets.get("GEMINI_API_KEY", "")
+    
+    if not api_key:
+        st.error("Please enter your API Key in the sidebar or add it to Streamlit secrets.")
     else:
-        try:
-            # Initialize the Client securely
-            client = genai.Client(api_key=api_key)
-            
-            with st.spinner(f"Processing with {model_choice}..."):
+        client = genai.Client(api_key=api_key)
+        
+        with st.spinner(f"Generating {num_images} images..."):
+            try:
+                # Use generate_images instead of generate_content
+                response = client.models.generate_images(
+                    model=model_choice,
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=num_images,
+                        aspect_ratio=aspect_ratio,
+                        output_mime_type="image/jpeg",
+                        # person_generation="ALLOW_ADULT" # Optional: Un-comment if you need to allow people generation based on your API tier
+                    )
+                )
                 
-                # --- IMAGE GENERATION BRANCH ---
-                if "Banana" in model_choice:
-                    api_model_name = "gemini-3-flash-image" if model_choice == "Nano Banana 2" else "gemini-3-pro-image"
-                    
-                    # THE FIX: generate_images and GenerateImagesConfig (PLURAL)
-                    response = client.models.generate_images(
-                        model=api_model_name,
-                        prompt=prompt,
-                        config=types.GenerateImagesConfig(
-                            aspect_ratio=aspect_ratio,
-                            number_of_images=num_images,
-                            output_mime_type="image/jpeg"
-                        )
-                    )
-                    
-                    # Display the images
-                    if response.generated_images:
-                        cols = st.columns(min(num_images, 2))
-                        for idx, generated_image in enumerate(response.generated_images):
-                            image_bytes = generated_image.image.image_bytes
-                            img = PIL.Image.open(io.BytesIO(image_bytes))
-                            with cols[idx % 2]:
-                                st.image(img, use_container_width=True, caption=f"Generated at {resolution}")
-                    else:
-                        st.error("No images generated. This might be due to safety filters.")
+                # Display results in a grid
+                cols = st.columns(2)
+                for i, generated_image in enumerate(response.generated_images):
+                    # The response object structure is different for generate_images
+                    img = PIL.Image.open(io.BytesIO(generated_image.image.image_bytes))
+                    cols[i % 2].image(img, use_container_width=True, caption=f"Variant {i+1}")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-                # --- TEXT GENERATION BRANCH ---
-                elif model_choice == "Gemini 3 Flash":
-                    response = client.models.generate_content(
-                        model="gemini-3-flash",
-                        contents=prompt
-                    )
-                    
-                    # Display the text
-                    if response.text:
-                        st.markdown("### Response:")
-                        st.write(response.text)
-                    else:
-                        st.error("No text generated.")
-                        
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
+st.divider()
+st.caption("Powered by Google GenAI.")
