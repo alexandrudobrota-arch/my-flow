@@ -1,115 +1,189 @@
 import streamlit as st
-import io
-import time
 from google import genai
 from google.genai import types
 import PIL.Image
+import io
 import cloudinary
 import cloudinary.uploader
+import cloudinary.api
+import uuid
 
-# --- Page Config ---
-st.set_page_config(page_title="Flow Clone", layout="wide")
-st.title("🌊 Flow: Multi-Ratio Image Generator")
+st.set_page_config(page_title="My Private Flow", layout="wide")
+st.title("🎨 Multi-Gen Image Studio (Nano Banana)")
 
-# --- Load Secrets Safely ---
+# --- Configure Cloudinary ---
+# We try to load secrets safely so the app doesn't crash if they are missing
 try:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
     cloudinary.config(
-        cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
-        api_key=st.secrets["CLOUDINARY_API_KEY"],
-        api_secret=st.secrets["CLOUDINARY_API_SECRET"]
+        cloud_name=st.secrets.get("CLOUDINARY_CLOUD_NAME", ""),
+        api_key=st.secrets.get("CLOUDINARY_API_KEY", ""),
+        api_secret=st.secrets.get("CLOUDINARY_API_SECRET", ""),
+        secure=True
     )
-    client = genai.Client(api_key=API_KEY)
-except Exception as e:
-    st.error("Failed to load secrets. Please check your .streamlit/secrets.toml file.")
-    st.stop()
+except Exception:
+    pass # Will handle missing credentials gracefully in the UI
 
-# --- UI Sidebar ---
+# --- Session State ---
+if "generated_images" not in st.session_state:
+    st.session_state.generated_images = []
+
+# --- Helper Function ---
+def get_closest_aspect_ratio(image: PIL.Image.Image) -> str:
+    w, h = image.size
+    ratio = w / h
+    ratios = {"1:1": 1.0, "16:9": 1.777, "9:16": 0.562, "4:3": 1.333, "3:4": 0.75}
+    return min(ratios.keys(), key=lambda k: abs(ratios[k] - ratio))
+
+def delete_image(index, public_id):
+    """Deletes image from Cloudinary and removes it from session state."""
+    try:
+        cloudinary.uploader.destroy(public_id)
+        st.session_state.generated_images.pop(index)
+        st.toast(f"Image deleted from Cloudinary!")
+    except Exception as e:
+        st.error(f"Failed to delete: {e}")
+
+# --- Sidebar Configuration ---
 with st.sidebar:
-    st.header("Settings")
-    # Gemini 3.1 Flash Image Preview supports the extreme aspect ratios (1:4, 4:1)
+    st.header("⚙️ Configuration")
+    
+    # Project Folder Name
+    project_name = st.text_input("Project Folder Name", value="My_Flow_Generations", help="Images will be saved in this Cloudinary folder.")
+    
+    api_key_input = st.text_input("Enter Gemini API Key (or leave blank for Secrets)", type="password")
+    
     model_choice = st.selectbox(
-        "Model", 
-        ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"],
-        index=0
+        "Select Model",
+        [
+            "gemini-3.1-flash-image-preview", # Nano Banana 2
+            "gemini-3-pro-image-preview",     # Nano Banana Pro
+            "gemini-2.5-flash-image"          # Nano Banana (Stable)
+        ]
     )
-    st.info("Generating 4 images sequentially to respect API limits. Images will be hosted on Cloudinary.")
+    
+    uploaded_file = st.file_uploader("Upload Reference Image", type=["png", "jpg", "jpeg"])
+    input_image = None
+    if uploaded_file:
+        input_image = PIL.Image.open(uploaded_file)
+        st.image(input_image, caption="Reference Image", use_container_width=True)
+    
+    image_quality = st.selectbox("Image Quality", ["1K", "2K", "4K"])
+    aspect_ratio_choice = st.selectbox("Aspect Ratio", ["Auto", "1:1", "16:9", "9:16", "4:3", "3:4"])
+    num_images = st.slider("Number of Images", 1, 4, 4)
 
 # --- Main UI ---
-prompt = st.text_area("What do you want to create?", placeholder="A cinematic shot of a cyberpunk city, neon lights, raining...")
+prompt = st.text_area("What do you want to see?", placeholder="A futuristic city...")
 
-if st.button("Generate Flow (4 Images)", type="primary", use_container_width=True):
-    if not prompt:
-        st.warning("Please enter a prompt first.")
+if st.button("Generate Images"):
+    api_key = api_key_input if api_key_input else st.secrets.get("GEMINI_API_KEY", "")
+    cloud_name = st.secrets.get("CLOUDINARY_CLOUD_NAME", "")
+    
+    if not api_key:
+        st.error("Please enter your API Key in the sidebar or add it to Streamlit secrets.")
+    elif not cloud_name:
+        st.error("Please configure your Cloudinary credentials in Streamlit secrets.")
+    elif not prompt:
+        st.warning("Please enter a prompt.")
     else:
-        # The 4 aspect ratios we want to generate
-        # Note: 4:1 (Ultra-Wide) is only supported by gemini-3.1-flash-image-preview
-        ratios = ["1:1", "16:9", "9:16", "4:1"] 
+        client = genai.Client(api_key=api_key)
         
-        # Create a 2x2 grid for our images
-        col1, col2 = st.columns(2)
-        placeholders = [
-            col1.empty(), 
-            col2.empty(), 
-            col1.empty(), 
-            col2.empty()
-        ]
+        # We don't clear the session state here anymore so you can build a gallery!
+        # If you want it to clear on every generation, uncomment the line below:
+        # st.session_state.generated_images = [] 
         
-        st.success("Starting generation sequence...")
+        if aspect_ratio_choice == "Auto":
+            if input_image:
+                api_aspect_ratio = get_closest_aspect_ratio(input_image)
+                st.toast(f"Auto Aspect Ratio snapped to {api_aspect_ratio}")
+            else:
+                api_aspect_ratio = "1:1"
+                st.toast("No image uploaded. Auto defaulted to 1:1.")
+        else:
+            api_aspect_ratio = aspect_ratio_choice
         
-        # Serialize the generation (one at a time)
-        for i, ratio in enumerate(ratios):
-            with placeholders[i].container():
-                st.info(f"⏳ Generating [{ratio}]...")
-                
-                try:
-                    # 1. Call Gemini API
+        with st.spinner(f"Generating {num_images} images and uploading to Cloudinary..."):
+            try:
+                contents_list = [prompt]
+                if input_image:
+                    contents_list.append(input_image)
+                    
+                for _ in range(num_images):
                     response = client.models.generate_content(
                         model=model_choice,
-                        contents=prompt,
+                        contents=contents_list,
                         config=types.GenerateContentConfig(
+                            response_modalities=["IMAGE"],
                             image_config=types.ImageConfig(
-                                aspect_ratio=ratio,
-                                image_size="1K"
+                                aspect_ratio=api_aspect_ratio
                             )
                         )
                     )
                     
-                    # 2. Extract Image
-                    img = None
                     for candidate in response.candidates:
                         for part in candidate.content.parts:
                             if part.inline_data:
-                                img = PIL.Image.open(io.BytesIO(part.inline_data.data))
-                                break
-                        if img: break
-                    
-                    if img:
-                        # 3. Upload to Cloudinary
-                        st.info(f"☁️ Uploading [{ratio}] to Cloudinary...")
-                        buf = io.BytesIO()
-                        img.save(buf, format='PNG')
-                        
-                        upload_result = cloudinary.uploader.upload(
-                            buf.getvalue(), 
-                            folder="flow_clone",
-                            tags=["flow_generated", ratio]
-                        )
-                        
-                        secure_url = upload_result.get("secure_url")
-                        
-                        # 4. Display the Cloudinary hosted image
-                        placeholders[i].empty() # Clear the info messages
-                        placeholders[i].image(secure_url, caption=f"Aspect Ratio: {ratio}", use_container_width=True)
-                        placeholders[i].markdown(f"[View Original on Cloudinary]({secure_url})")
-                    else:
-                        placeholders[i].error(f"Failed to generate image for {ratio}")
-                        
-                except Exception as e:
-                    placeholders[i].error(f"Error on {ratio}: {e}")
-                
-                # Small pause between API calls to ensure we don't hit rate limits
-                if i < len(ratios) - 1:
-                    time.sleep(2)
+                                img_bytes = part.inline_data.data
+                                
+                                # --- Upload to Cloudinary ---
+                                upload_result = cloudinary.uploader.upload(
+                                    io.BytesIO(img_bytes),
+                                    folder=project_name,
+                                    public_id=f"flow_gen_{uuid.uuid4().hex[:8]}", # Unique ID
+                                    resource_type="image"
+                                )
+                                
+                                # Store the dictionary with Cloudinary metadata
+                                st.session_state.generated_images.append({
+                                    "bytes": img_bytes,
+                                    "url": upload_result.get("secure_url"),
+                                    "public_id": upload_result.get("public_id")
+                                })
+                                
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-        st.balloons()
+# --- Display Results & Action Buttons ---
+if st.session_state.generated_images:
+    st.subheader(f"📂 Project Gallery: {project_name}")
+    
+    # We use dynamic columns so it wraps nicely
+    cols = st.columns(2)
+    
+    for i, img_data in enumerate(st.session_state.generated_images):
+        with cols[i % 2]:
+            # Load image from bytes
+            img = PIL.Image.open(io.BytesIO(img_data["bytes"]))
+            st.image(img, use_container_width=True, caption=f"Variant {i+1}")
+            
+            btn_cols = st.columns(3) # Added a 3rd column for Delete
+            
+            # Download Button
+            with btn_cols[0]:
+                st.download_button(
+                    label="⬇️ Download",
+                    data=img_data["bytes"],
+                    file_name=f"flow_generation_{i+1}.jpeg",
+                    mime="image/jpeg",
+                    use_container_width=True,
+                    key=f"dl_{i}_{img_data['public_id']}"
+                )
+            
+            # Upscale Button
+            with btn_cols[1]:
+                if image_quality != "4K":
+                    if st.button("✨ Upscale", use_container_width=True, key=f"up_{i}_{img_data['public_id']}"):
+                        st.info("Upscale logic here!")
+            
+            # Delete Button
+            with btn_cols[2]:
+                # We use on_click to trigger the deletion and rerun the UI
+                st.button(
+                    "🗑️ Delete", 
+                    use_container_width=True, 
+                    key=f"del_{i}_{img_data['public_id']}",
+                    on_click=delete_image,
+                    args=(i, img_data["public_id"])
+                )
+
+st.divider()
+st.caption("Powered by Google GenAI & Cloudinary.")
